@@ -1,0 +1,29 @@
+# Recursos do Unity Catalog + MLflow gerenciados por este bundle. Tudo o que vem depois referencia estes
+# recursos (e não nomes fixos), então os targets ficam isolados pelo schema.
+resources:
+  schemas:
+    credit_schema:
+      catalog_name: ${var.catalog}
+      name: ${var.schema}
+      comment: Credit scoring MLOps — bronze/silver/gold, modelo registrado e inference table
+
+  volumes:
+    raw_data:
+      catalog_name: ${var.catalog}
+      schema_name: ${resources.schemas.credit_schema.name}
+      name: raw_data
+      volume_type: MANAGED
+      comment: Arquivos brutos do Give Me Some Credit (Kaggle) — cs-training.csv, enviado manualmente
+
+  registered_models:
+    credit_scoring_model:
+      catalog_name: ${var.catalog}
+      schema_name: ${resources.schemas.credit_schema.name}
+      name: credit_scoring_xgb
+      comment: >-
+        XGBoost de credit scoring com pré-processamento embutido (pyfunc: dados brutos do cliente →
+        prob_inadimplencia, score, decisao, motivos). Alias @champion = versão em produção (lote + endpoint).
+
+  experiments:
+    credit_experiment:
+      name: /Users/${workspace.current_user.userName}/credit_scoring_${bundle.target}

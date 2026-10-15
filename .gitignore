@@ -1,0 +1,13 @@
+.venv/
+.databricks/
+scratch/
+__pycache__/
+*.pyc
+.pytest_cache/
+mlruns/
+.ipynb_checkpoints/
+
+# Dados (Kaggle: não redistribuir) e artefatos locais
+data/
+models/
+reports/

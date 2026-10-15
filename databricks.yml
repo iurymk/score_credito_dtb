@@ -1,0 +1,70 @@
+bundle:
+  name: credit_scoring
+
+include:
+  - resources/*.yml
+
+# Só o código de produção vai para o workspace no deploy. Os notebooks de exploração
+# (notebooks/exploration) ficam no Git / Git folder, fora do job.
+sync:
+  include:
+    - src/**
+  exclude:
+    - .venv/**
+    - data/**
+    - notebooks/**
+    - tests/**
+    - "**/__pycache__/**"
+
+# Nenhum host fixo aqui de propósito: a CLI usa o profile passado com -p/--profile
+# (ou DATABRICKS_CONFIG_PROFILE / o profile DEFAULT), então o mesmo bundle faz deploy em qualquer workspace.
+variables:
+  catalog:
+    description: >-
+      Catálogo existente do Unity Catalog onde o schema será criado. Altere o default do target abaixo,
+      ou use --var catalog=<nome> / BUNDLE_VAR_catalog.
+  schema:
+    description: Schema criado pelo bundle para tabelas, Volume, modelo e inference table
+    default: credit_scoring
+  min_auc:
+    description: Portão de qualidade — AUC mínima no teste para virar @champion
+    default: 0.85
+  min_ks:
+    description: Portão de qualidade — KS mínimo no teste (benchmark de mercado ~0.40)
+    default: 0.40
+  max_fairness_gap:
+    description: Portão de qualidade — variação máxima de AUC entre faixas de idade/renda
+    default: 0.05
+  endpoint_name:
+    default: credit-scoring
+  notification_email:
+    description: Quem recebe e-mail de falha
+    default: ${workspace.current_user.userName}
+
+targets:
+  dev:
+    default: true
+    # Sem `mode: development`: ele renomearia os objetos do UC para dev_<usuário>_*; a demo mostra nomes limpos.
+    # O isolamento entre targets vem do schema e do nome do endpoint por target.
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      catalog: workspace  # catálogo padrão do Databricks Free Edition; troque pelo seu se for diferente
+      schema: credit_scoring_dev
+      endpoint_name: credit-scoring-dev
+    presets:
+      tags:
+        env: dev
+
+  prod:
+    mode: production
+    workspace:
+      # Para um rollout real em produção, faça o deploy pelo CI com `run_as: {service_principal_name: ...}`.
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      catalog: workspace
+      schema: credit_scoring_prod
+      endpoint_name: credit-scoring
+    permissions:
+      - level: CAN_MANAGE
+        user_name: ${workspace.current_user.userName}
