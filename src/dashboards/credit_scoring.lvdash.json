@@ -1,0 +1,1402 @@
+{
+  "datasets": [
+    {
+      "name": "ds_kpis",
+      "displayName": "Indicadores da safra",
+      "queryLines": [
+        "WITH ult AS (SELECT safra, model_version FROM gold_credit_scores ORDER BY scored_at DESC LIMIT 1), s AS (SELECT g.* FROM gold_credit_scores g JOIN ult USING (safra, model_version)) ",
+        "SELECT FIRST(s.safra) AS safra, CONCAT('v', FIRST(s.model_version)) AS modelo, COUNT(*) AS clientes, ",
+        "ROUND(AVG(CASE WHEN s.decisao = 'REPROVAR' THEN 1 ELSE 0 END), 4) AS pct_reprovados, ",
+        "ROUND(AVG(s.score), 0) AS score_medio, ",
+        "(SELECT ROUND(MAX(r.psi), 4) FROM gold_monitoramento_resumo r JOIN ult u USING (safra, model_version) ",
+        " WHERE r.variavel = 'score_modelo') AS psi_score, ",
+        "(SELECT COUNT(*) FROM gold_monitoramento_resumo r JOIN ult u USING (safra, model_version) ",
+        " WHERE r.status <> 'estável') AS variaveis_em_alerta ",
+        "FROM s"
+      ]
+    },
+    {
+      "name": "ds_psi_resumo",
+      "displayName": "PSI por variável",
+      "queryLines": [
+        "WITH ult AS (SELECT safra, model_version FROM gold_monitoramento_resumo ORDER BY monitored_at DESC LIMIT 1) ",
+        "SELECT r.variavel, ROUND(r.psi, 4) AS psi, r.status, r.safra, r.model_version ",
+        "FROM gold_monitoramento_resumo r JOIN ult USING (safra, model_version) ORDER BY r.psi DESC"
+      ]
+    },
+    {
+      "name": "ds_psi_detalhe",
+      "displayName": "PSI por faixa",
+      "queryLines": [
+        "WITH ult AS (SELECT safra, model_version FROM gold_monitoramento_resumo ORDER BY monitored_at DESC LIMIT 1) ",
+        "SELECT p.variavel, p.faixa, ROUND(p.pct_esperado, 4) AS pct_esperado, ROUND(p.pct_atual, 4) AS pct_atual, ",
+        "ROUND(p.psi, 5) AS psi FROM gold_monitoramento_psi p JOIN ult USING (safra, model_version) ",
+        "ORDER BY p.variavel, p.faixa"
+      ]
+    },
+    {
+      "name": "ds_iv",
+      "displayName": "IV por variável",
+      "queryLines": [
+        "WITH ult AS (SELECT model_version FROM gold_credit_scores ORDER BY scored_at DESC LIMIT 1) ",
+        "SELECT b.variavel, ROUND(SUM(b.iv), 4) AS iv FROM gold_bivariadas b JOIN ult USING (model_version) ",
+        "GROUP BY b.variavel ORDER BY iv DESC"
+      ]
+    },
+    {
+      "name": "ds_bivariadas",
+      "displayName": "Bivariadas (optimal binning)",
+      "queryLines": [
+        "WITH ult AS (SELECT model_version FROM gold_credit_scores ORDER BY scored_at DESC LIMIT 1) ",
+        "SELECT b.variavel, b.faixa, b.qtd, ROUND(b.pct_total, 4) AS pct_total, b.evento, b.nao_evento, ",
+        "ROUND(b.taxa_evento, 4) AS taxa_evento, ROUND(b.odds, 4) AS odds, ROUND(b.woe, 4) AS woe, ",
+        "ROUND(b.iv, 4) AS iv, ROUND(b.lift, 2) AS lift ",
+        "FROM gold_bivariadas b JOIN ult USING (model_version) ORDER BY b.variavel, b.faixa"
+      ]
+    },
+    {
+      "name": "ds_decisao",
+      "displayName": "Decisões da safra",
+      "queryLines": [
+        "WITH ult AS (SELECT safra, model_version FROM gold_credit_scores ORDER BY scored_at DESC LIMIT 1) ",
+        "SELECT g.decisao, COUNT(*) AS clientes FROM gold_credit_scores g JOIN ult USING (safra, model_version) ",
+        "GROUP BY g.decisao"
+      ]
+    },
+    {
+      "name": "ds_score",
+      "displayName": "Distribuição do score",
+      "queryLines": [
+        "WITH ult AS (SELECT safra, model_version FROM gold_credit_scores ORDER BY scored_at DESC LIMIT 1) ",
+        "SELECT CAST(FLOOR(g.score / 50) * 50 AS INT) AS faixa_score, COUNT(*) AS clientes ",
+        "FROM gold_credit_scores g JOIN ult USING (safra, model_version) GROUP BY 1 ORDER BY 1"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "monitoramento",
+      "displayName": "Monitoramento (PSI)",
+      "layout": [
+        {
+          "widget": {
+            "name": "t_mon",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Monitoramento de estabilidade — treino (esperado) × safra (atual)",
+                "PSI < 0,10 estável · 0,10–0,25 atenção · > 0,25 instável. Faixas das features: optimal binning do treino; score: decis do treino."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "k_safra",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpis",
+                  "fields": [
+                    {
+                      "name": "safra",
+                      "expression": "`safra`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "safra",
+                  "displayName": "Safra"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Safra"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k_modelo",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpis",
+                  "fields": [
+                    {
+                      "name": "modelo",
+                      "expression": "`modelo`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "modelo",
+                  "displayName": "Modelo (@champion)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Modelo (@champion)"
+              }
+            }
+          },
+          "position": {
+            "x": 1,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k_clientes",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpis",
+                  "fields": [
+                    {
+                      "name": "clientes",
+                      "expression": "`clientes`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "clientes",
+                  "displayName": "Clientes escorados"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Clientes escorados"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k_reprov",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpis",
+                  "fields": [
+                    {
+                      "name": "pct_reprovados",
+                      "expression": "`pct_reprovados`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "pct_reprovados",
+                  "displayName": "% reprovados"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "% reprovados"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k_psi",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpis",
+                  "fields": [
+                    {
+                      "name": "psi_score",
+                      "expression": "`psi_score`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "psi_score",
+                  "displayName": "PSI do score"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "PSI do score"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k_alertas",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpis",
+                  "fields": [
+                    {
+                      "name": "variaveis_em_alerta",
+                      "expression": "`variaveis_em_alerta`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "variaveis_em_alerta",
+                  "displayName": "Variáveis em alerta"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Variáveis em alerta"
+              }
+            }
+          },
+          "position": {
+            "x": 5,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "b_psi",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_psi_resumo",
+                  "fields": [
+                    {
+                      "name": "variavel",
+                      "expression": "`variavel`"
+                    },
+                    {
+                      "name": "psi",
+                      "expression": "`psi`"
+                    },
+                    {
+                      "name": "status",
+                      "expression": "`status`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "psi",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "psi"
+                },
+                "y": {
+                  "fieldName": "variavel",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "variavel"
+                },
+                "color": {
+                  "fieldName": "status",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "status"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "PSI por variável"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 3,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "t_psi_resumo",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_psi_resumo",
+                  "fields": [
+                    {
+                      "name": "variavel",
+                      "expression": "`variavel`"
+                    },
+                    {
+                      "name": "psi",
+                      "expression": "`psi`"
+                    },
+                    {
+                      "name": "status",
+                      "expression": "`status`"
+                    },
+                    {
+                      "name": "safra",
+                      "expression": "`safra`"
+                    },
+                    {
+                      "name": "model_version",
+                      "expression": "`model_version`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "variavel",
+                    "type": "string",
+                    "displayAs": "string",
+                    "visible": true,
+                    "order": 0,
+                    "title": "variavel",
+                    "displayName": "variavel",
+                    "alignContent": "left",
+                    "allowSearch": true,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true
+                  },
+                  {
+                    "fieldName": "psi",
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 1,
+                    "title": "psi",
+                    "displayName": "psi",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "fieldName": "status",
+                    "type": "string",
+                    "displayAs": "string",
+                    "visible": true,
+                    "order": 2,
+                    "title": "status",
+                    "displayName": "status",
+                    "alignContent": "left",
+                    "allowSearch": true,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true
+                  },
+                  {
+                    "fieldName": "safra",
+                    "type": "string",
+                    "displayAs": "string",
+                    "visible": true,
+                    "order": 3,
+                    "title": "safra",
+                    "displayName": "safra",
+                    "alignContent": "left",
+                    "allowSearch": true,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true
+                  },
+                  {
+                    "fieldName": "model_version",
+                    "type": "string",
+                    "displayAs": "string",
+                    "visible": true,
+                    "order": 4,
+                    "title": "model_version",
+                    "displayName": "model_version",
+                    "alignContent": "left",
+                    "allowSearch": true,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true
+                  }
+                ]
+              },
+              "invisibleColumns": [],
+              "allowHTMLByDefault": false,
+              "itemsPerPage": 25,
+              "paginationSize": "default",
+              "condensed": true,
+              "withRowNumber": false,
+              "frame": {
+                "showTitle": true,
+                "title": "Resumo por variável"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 5,
+            "width": 3,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "t_psi_det",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_psi_detalhe",
+                  "fields": [
+                    {
+                      "name": "variavel",
+                      "expression": "`variavel`"
+                    },
+                    {
+                      "name": "faixa",
+                      "expression": "`faixa`"
+                    },
+                    {
+                      "name": "pct_esperado",
+                      "expression": "`pct_esperado`"
+                    },
+                    {
+                      "name": "pct_atual",
+                      "expression": "`pct_atual`"
+                    },
+                    {
+                      "name": "psi",
+                      "expression": "`psi`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "variavel",
+                    "type": "string",
+                    "displayAs": "string",
+                    "visible": true,
+                    "order": 0,
+                    "title": "variavel",
+                    "displayName": "variavel",
+                    "alignContent": "left",
+                    "allowSearch": true,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true
+                  },
+                  {
+                    "fieldName": "faixa",
+                    "type": "string",
+                    "displayAs": "string",
+                    "visible": true,
+                    "order": 1,
+                    "title": "faixa",
+                    "displayName": "faixa",
+                    "alignContent": "left",
+                    "allowSearch": true,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true
+                  },
+                  {
+                    "fieldName": "pct_esperado",
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 2,
+                    "title": "pct_esperado",
+                    "displayName": "pct_esperado",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "fieldName": "pct_atual",
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 3,
+                    "title": "pct_atual",
+                    "displayName": "pct_atual",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "fieldName": "psi",
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 4,
+                    "title": "psi",
+                    "displayName": "psi",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "numberFormat": "0.0000"
+                  }
+                ]
+              },
+              "invisibleColumns": [],
+              "allowHTMLByDefault": false,
+              "itemsPerPage": 25,
+              "paginationSize": "default",
+              "condensed": true,
+              "withRowNumber": false,
+              "frame": {
+                "showTitle": true,
+                "title": "Esperado × atual por faixa"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 13,
+            "width": 6,
+            "height": 9
+          }
+        }
+      ]
+    },
+    {
+      "name": "bivariadas",
+      "displayName": "Bivariadas",
+      "layout": [
+        {
+          "widget": {
+            "name": "t_biv",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Análise bivariada das features do modelo (optimal binning)",
+                "Por faixa: volume, taxa de inadimplência, odds (eventos por não-evento), WoE, IV e lift. IV: < 0,02 fraco · 0,02–0,10 médio · 0,10–0,30 forte · > 0,30 muito forte."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "b_iv",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_iv",
+                  "fields": [
+                    {
+                      "name": "variavel",
+                      "expression": "`variavel`"
+                    },
+                    {
+                      "name": "iv",
+                      "expression": "`iv`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "iv",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "iv"
+                },
+                "y": {
+                  "fieldName": "variavel",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "variavel"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Information Value por variável"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 2,
+            "height": 10
+          }
+        },
+        {
+          "widget": {
+            "name": "t_bivariadas",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_bivariadas",
+                  "fields": [
+                    {
+                      "name": "variavel",
+                      "expression": "`variavel`"
+                    },
+                    {
+                      "name": "faixa",
+                      "expression": "`faixa`"
+                    },
+                    {
+                      "name": "qtd",
+                      "expression": "`qtd`"
+                    },
+                    {
+                      "name": "pct_total",
+                      "expression": "`pct_total`"
+                    },
+                    {
+                      "name": "evento",
+                      "expression": "`evento`"
+                    },
+                    {
+                      "name": "nao_evento",
+                      "expression": "`nao_evento`"
+                    },
+                    {
+                      "name": "taxa_evento",
+                      "expression": "`taxa_evento`"
+                    },
+                    {
+                      "name": "odds",
+                      "expression": "`odds`"
+                    },
+                    {
+                      "name": "woe",
+                      "expression": "`woe`"
+                    },
+                    {
+                      "name": "iv",
+                      "expression": "`iv`"
+                    },
+                    {
+                      "name": "lift",
+                      "expression": "`lift`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "variavel",
+                    "type": "string",
+                    "displayAs": "string",
+                    "visible": true,
+                    "order": 0,
+                    "title": "variavel",
+                    "displayName": "variavel",
+                    "alignContent": "left",
+                    "allowSearch": true,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true
+                  },
+                  {
+                    "fieldName": "faixa",
+                    "type": "string",
+                    "displayAs": "string",
+                    "visible": true,
+                    "order": 1,
+                    "title": "faixa",
+                    "displayName": "faixa",
+                    "alignContent": "left",
+                    "allowSearch": true,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true
+                  },
+                  {
+                    "fieldName": "qtd",
+                    "type": "integer",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 2,
+                    "title": "qtd",
+                    "displayName": "qtd",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true
+                  },
+                  {
+                    "fieldName": "pct_total",
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 3,
+                    "title": "pct_total",
+                    "displayName": "pct_total",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "fieldName": "evento",
+                    "type": "integer",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 4,
+                    "title": "evento",
+                    "displayName": "evento",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true
+                  },
+                  {
+                    "fieldName": "nao_evento",
+                    "type": "integer",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 5,
+                    "title": "nao_evento",
+                    "displayName": "nao_evento",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true
+                  },
+                  {
+                    "fieldName": "taxa_evento",
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 6,
+                    "title": "taxa_evento",
+                    "displayName": "taxa_evento",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "fieldName": "odds",
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 7,
+                    "title": "odds",
+                    "displayName": "odds",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "fieldName": "woe",
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 8,
+                    "title": "woe",
+                    "displayName": "woe",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "fieldName": "iv",
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 9,
+                    "title": "iv",
+                    "displayName": "iv",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "fieldName": "lift",
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 10,
+                    "title": "lift",
+                    "displayName": "lift",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "numberFormat": "0.0000"
+                  }
+                ]
+              },
+              "invisibleColumns": [],
+              "allowHTMLByDefault": false,
+              "itemsPerPage": 25,
+              "paginationSize": "default",
+              "condensed": true,
+              "withRowNumber": false,
+              "frame": {
+                "showTitle": true,
+                "title": "Tabela bivariada"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 4,
+            "height": 10
+          }
+        }
+      ]
+    },
+    {
+      "name": "escoragem",
+      "displayName": "Escoragem",
+      "layout": [
+        {
+          "widget": {
+            "name": "t_esc",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Escoragem da safra com o @champion",
+                "Score 0–1000: quanto maior, menor o risco. Decisão pelo threshold registrado com o modelo."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "b_decisao",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_decisao",
+                  "fields": [
+                    {
+                      "name": "decisao",
+                      "expression": "`decisao`"
+                    },
+                    {
+                      "name": "clientes",
+                      "expression": "`clientes`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "decisao",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "decisao"
+                },
+                "y": {
+                  "fieldName": "clientes",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "clientes"
+                },
+                "color": {
+                  "fieldName": "decisao",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "decisao"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Clientes por decisão"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 2,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "b_score",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_score",
+                  "fields": [
+                    {
+                      "name": "faixa_score",
+                      "expression": "`faixa_score`"
+                    },
+                    {
+                      "name": "clientes",
+                      "expression": "`clientes`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "faixa_score",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "faixa_score"
+                },
+                "y": {
+                  "fieldName": "clientes",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "clientes"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Distribuição do score (faixas de 50 pontos)"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 4,
+            "height": 7
+          }
+        }
+      ]
+    }
+  ]
+}

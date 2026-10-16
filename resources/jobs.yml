@@ -1,0 +1,175 @@
+# Três esteiras com ciclos de vida diferentes (padrão de MLOps: dados, treino e inferência separados) e um
+# orquestrador que roda as três em sequência para a demonstração ponta a ponta.
+#
+#   [dados]      ingest_data ─▶ prepare_data                          quando chega dado novo
+#                 (bronze)       (silver: treino com splits + safra)
+#   [treino]     train_register ─▶ evaluate_promote ─▶ deploy_endpoint só quando o modelo muda
+#                 (UC: nova versão)  (@champion + bivariadas)
+#   [escoragem]  batch_scoring ─▶ monitoring                          a cada safra (ex.: mensal)
+#                 (gold_credit_scores)  (PSI → gold_monitoramento_*)
+#
+# As esteiras se comunicam pelas tabelas Delta e pelo alias @champion do Unity Catalog — nunca por arquivos.
+# A escoragem não retreina: ela só consome o modelo promovido.
+#
+# Fail fast: sem retries (inclusive os retries automáticos do serverless), timeout por tarefa, validações de dados
+# e portões de qualidade lançam exceção antes das etapas seguintes, e max_concurrent_runs: 1 por job.
+
+resources:
+  jobs:
+    # ── Esteira de dados (arquitetura medalhão) ───────────────────────────────────────────────────
+    credit_dados:
+      name: "[${bundle.target}] credit-scoring · 1 · dados"
+      description: Ingestão dos CSVs (bronze) → qualidade e splits (silver), para o treino e para a safra de produção
+      max_concurrent_runs: 1
+      timeout_seconds: 3600
+      email_notifications:
+        on_failure: [ "${var.notification_email}" ]
+      tags:
+        project: credit-scoring-mlops
+        esteira: dados
+      parameters:
+        - { name: catalog, default: "${var.catalog}" }
+        - { name: schema, default: "${resources.schemas.credit_schema.name}" }
+        - { name: volume, default: "${resources.volumes.raw_data.name}" }
+        - { name: safra, default: "${var.safra}" }
+      # Serverless CPU com as mesmas versões em todos os jobs (âncora reaproveitada abaixo): o modelo treinado carrega
+      # igual na avaliação, na escoragem e no endpoint (o pip_requirements do modelo é gerado a partir deste ambiente).
+      environments: &environment
+        - environment_key: default
+          spec:
+            environment_version: "4"
+            dependencies:
+              - mlflow==3.13.0
+              - scikit-learn==1.9.1
+              - xgboost==3.4.1
+              - shap==0.53.0
+              - optbinning==1.0.0
+              - matplotlib==3.10.7
+              - databricks-sdk==0.67.0
+      tasks:
+        - task_key: ingest_data
+          environment_key: default
+          max_retries: 0
+          disable_auto_optimization: true  # sem retries ocultos do serverless: falha rápido, corrige, repair-run
+          timeout_seconds: 1200
+          notebook_task:
+            notebook_path: ../src/jobs/dados/01_ingest_data.py
+        - task_key: prepare_data
+          environment_key: default
+          max_retries: 0
+          disable_auto_optimization: true  # sem retries ocultos do serverless: falha rápido, corrige, repair-run
+          depends_on: [ { task_key: ingest_data } ]
+          timeout_seconds: 1200
+          notebook_task:
+            notebook_path: ../src/jobs/dados/02_prepare_data.py
+
+    # ── Esteira de treino (MLOps) ────────────────────────────────────────────────────────────────
+    credit_treino:
+      name: "[${bundle.target}] credit-scoring · 2 · treino"
+      description: Treino e registro no Unity Catalog → avaliação com portões de qualidade e @champion → endpoint
+      max_concurrent_runs: 1  # evita duas execuções disputando o @champion
+      timeout_seconds: 7200
+      email_notifications:
+        on_failure: [ "${var.notification_email}" ]
+      tags:
+        project: credit-scoring-mlops
+        esteira: treino
+      parameters:
+        - { name: catalog, default: "${var.catalog}" }
+        - { name: schema, default: "${resources.schemas.credit_schema.name}" }
+        - { name: model_name, default: "${var.catalog}.${resources.schemas.credit_schema.name}.${resources.registered_models.credit_scoring_model.name}" }
+        - { name: experiment_path, default: "${resources.experiments.credit_experiment.name}" }
+        - { name: min_recall, default: "${var.min_recall}" }
+        - { name: min_auc, default: "${var.min_auc}" }
+        - { name: min_ks, default: "${var.min_ks}" }
+        - { name: max_fairness_gap, default: "${var.max_fairness_gap}" }
+        - { name: endpoint_name, default: "${var.endpoint_name}" }
+        - { name: workload_size, default: "Small" }
+        - { name: deploy_timeout_minutes, default: "40" }
+        - { name: enable_inference_table, default: "${var.enable_inference_table}" }
+        - { name: job_run_id, default: "{{job.run_id}}" }
+      environments: *environment
+      tasks:
+        - task_key: train_register
+          environment_key: default
+          max_retries: 0
+          disable_auto_optimization: true  # sem retries ocultos do serverless: falha rápido, corrige, repair-run
+          timeout_seconds: 2400
+          notebook_task:
+            notebook_path: ../src/jobs/treino/03_train_register.py
+        - task_key: evaluate_promote
+          environment_key: default
+          max_retries: 0
+          disable_auto_optimization: true  # sem retries ocultos do serverless: falha rápido, corrige, repair-run
+          depends_on: [ { task_key: train_register } ]
+          timeout_seconds: 1800
+          notebook_task:
+            notebook_path: ../src/jobs/treino/04_evaluate_promote.py
+            base_parameters:
+              model_version: "{{tasks.train_register.values.model_version}}"
+        - task_key: deploy_endpoint
+          environment_key: default
+          max_retries: 0
+          disable_auto_optimization: true  # sem retries ocultos do serverless: falha rápido, corrige, repair-run
+          depends_on: [ { task_key: evaluate_promote } ]
+          timeout_seconds: 3000
+          notebook_task:
+            notebook_path: ../src/jobs/treino/05_deploy_endpoint.py
+            base_parameters:
+              model_version: "{{tasks.evaluate_promote.values.champion_version}}"
+
+    # ── Esteira de escoragem e monitoramento ─────────────────────────────────────────────────────
+    credit_escoragem:
+      name: "[${bundle.target}] credit-scoring · 3 · escoragem e monitoramento"
+      description: Escora a safra com o @champion (gold) → PSI treino × safra por feature e do score (gold)
+      max_concurrent_runs: 1
+      timeout_seconds: 3600
+      email_notifications:
+        on_failure: [ "${var.notification_email}" ]
+      tags:
+        project: credit-scoring-mlops
+        esteira: escoragem
+      parameters:
+        - { name: catalog, default: "${var.catalog}" }
+        - { name: schema, default: "${resources.schemas.credit_schema.name}" }
+        - { name: model_name, default: "${var.catalog}.${resources.schemas.credit_schema.name}.${resources.registered_models.credit_scoring_model.name}" }
+        - { name: safra, default: "${var.safra}" }
+        - { name: job_run_id, default: "{{job.run_id}}" }
+      environments: *environment
+      tasks:
+        - task_key: batch_scoring
+          environment_key: default
+          max_retries: 0
+          disable_auto_optimization: true  # sem retries ocultos do serverless: falha rápido, corrige, repair-run
+          timeout_seconds: 1800
+          notebook_task:
+            notebook_path: ../src/jobs/escoragem/06_batch_scoring.py
+        - task_key: monitoring
+          environment_key: default
+          max_retries: 0
+          disable_auto_optimization: true  # sem retries ocultos do serverless: falha rápido, corrige, repair-run
+          depends_on: [ { task_key: batch_scoring } ]
+          timeout_seconds: 1800
+          notebook_task:
+            notebook_path: ../src/jobs/escoragem/07_monitoring.py
+
+    # ── Orquestrador (demonstração ponta a ponta) ────────────────────────────────────────────────
+    credit_ponta_a_ponta:
+      name: "[${bundle.target}] credit-scoring · 0 · ponta a ponta"
+      description: Roda as três esteiras em sequência (dados → treino → escoragem). No dia a dia, cada esteira roda sozinha.
+      max_concurrent_runs: 1
+      tags:
+        project: credit-scoring-mlops
+        esteira: orquestracao
+      tasks:
+        - task_key: esteira_dados
+          run_job_task:
+            job_id: ${resources.jobs.credit_dados.id}
+        - task_key: esteira_treino
+          depends_on: [ { task_key: esteira_dados } ]
+          run_job_task:
+            job_id: ${resources.jobs.credit_treino.id}
+        - task_key: esteira_escoragem
+          depends_on: [ { task_key: esteira_treino } ]
+          run_job_task:
+            job_id: ${resources.jobs.credit_escoragem.id}

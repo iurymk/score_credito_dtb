@@ -1,0 +1,11 @@
+# Painel AI/BI (Lakeview) declarado como código: monitoramento de estabilidade (PSI), análise bivariada das features
+# (optimal binning) e resultado da escoragem. As consultas usam nomes de tabela sem catálogo/schema; o bundle
+# injeta o schema de cada target (dataset_catalog / dataset_schema), então o mesmo painel serve dev e prod.
+resources:
+  dashboards:
+    credit_scoring_dashboard:
+      display_name: "[${bundle.target}] Credit Scoring — monitoramento"
+      file_path: ../src/dashboards/credit_scoring.lvdash.json
+      warehouse_id: ${var.warehouse_id}
+      dataset_catalog: ${var.catalog}
+      dataset_schema: ${resources.schemas.credit_schema.name}

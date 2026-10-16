@@ -34,6 +34,19 @@ def test_pyfunc_matches_pipeline_and_applies_threshold(logged_model, credit_df):
         assert set(json.loads(motivos)) <= set(c.FEATURES)
 
 
+def test_pyfunc_accepts_int_and_float_payloads(logged_model, credit_df):
+    """Regressão: com a entrada declarada como double, o MLflow recusava int64 (JSON "age": 32) no endpoint."""
+    model, _ = logged_model
+    as_ints = credit_df[c.MODEL_INPUT_COLUMNS].head(5).fillna(0).round().astype("int64")
+    as_floats = as_ints.astype("float64")
+    out_int, out_float = model.predict(as_ints), model.predict(as_floats)
+    pd.testing.assert_frame_equal(out_int, out_float)
+    # um único cliente como chegaria por JSON, misturando inteiros e decimais
+    record = {col: int(as_ints[col].iloc[0]) for col in c.MODEL_INPUT_COLUMNS}
+    record[c.REVOLVING] = 0.95
+    assert model.predict(pd.DataFrame([record]))["decisao"].iloc[0] in (c.APPROVE, c.REJECT)
+
+
 def test_pyfunc_accepts_endpoint_payload_with_nulls(logged_model, credit_df):
     model, _ = logged_model
     record = {col: float(credit_df[col].iloc[0]) for col in c.MODEL_INPUT_COLUMNS}

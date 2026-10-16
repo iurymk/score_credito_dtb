@@ -5,7 +5,15 @@ SEED = 42
 # Give Me Some Credit (Kaggle): a primeira coluna do CSV é um índice sem nome → vira ``id``.
 ID_COL = "id"
 TARGET = "SeriousDlqin2yrs"
-TRAINING_FILE = "cs-training.csv"
+TRAINING_FILE = "cs-training.csv"  # 150 mil clientes com target: desenvolvimento do modelo
+SAFRA_FILE = "cs-test.csv"  # 101 mil clientes sem target: a "safra de produção" escorada e monitorada
+
+# Tabelas por camada da arquitetura medalhão (nomes dentro de <catalog>.<schema>)
+BRONZE_TREINO, BRONZE_SAFRA = "bronze_credit_treino", "bronze_credit_safra"
+SILVER_TREINO, SILVER_SAFRA = "silver_credit_treino", "silver_credit_safra"
+GOLD_SCORES = "gold_credit_scores"
+GOLD_BIVARIADAS = "gold_bivariadas"
+GOLD_PSI, GOLD_PSI_RESUMO = "gold_monitoramento_psi", "gold_monitoramento_resumo"
 
 REVOLVING = "RevolvingUtilizationOfUnsecuredLines"
 AGE = "age"

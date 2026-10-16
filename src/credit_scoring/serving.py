@@ -18,7 +18,8 @@ import joblib
 import mlflow
 import numpy as np
 import pandas as pd
-from mlflow.models import infer_signature
+from mlflow.models import ModelSignature, infer_signature
+from mlflow.types.schema import AnyType, ColSpec, Schema
 
 from credit_scoring import config as c
 
@@ -98,14 +99,19 @@ def log_model(pipeline, threshold: float, X_example: pd.DataFrame, registered_mo
             )
         artifacts = {"pipeline": pipeline_path, "model_config": cfg_path}
 
-        # Entrada em float: o endpoint aceita inteiros e decimais, e nulos em MonthlyIncome/NumberOfDependents.
-        input_example = X_example[c.MODEL_INPUT_COLUMNS].astype("float64").reset_index(drop=True)
+        input_example = X_example[c.MODEL_INPUT_COLUMNS].reset_index(drop=True)
 
-        # Signature a partir de uma predição real do wrapper (também serve de teste de carga).
-        # A saída é um DataFrame com colunas nomeadas → ColSpec com "name" e "type".
+        # Signature: a saída é inferida de uma predição real do wrapper (também serve de teste de carga) e vira
+        # ColSpec com "name" e "type". A entrada é declarada com tipo "any": o MLflow recusa converter int64 → double
+        # ("Can not safely convert"), então um JSON com "age": 32 ou "MonthlyIncome": 3200 seria rejeitado pelo
+        # endpoint. A conversão numérica fica no CreditPreprocessor (pd.to_numeric), que aceita inteiros, decimais e nulos.
         wrapper = CreditScoringModel()
         wrapper.load_context(type("Ctx", (), {"artifacts": artifacts})())
-        signature = infer_signature(model_input=input_example, model_output=wrapper.predict(None, input_example))
+        output = infer_signature(model_input=input_example, model_output=wrapper.predict(None, input_example)).outputs
+        inputs = Schema(
+            [ColSpec(AnyType(), col, required=col not in c.NULLABLE_COLUMNS) for col in c.MODEL_INPUT_COLUMNS]
+        )
+        signature = ModelSignature(inputs=inputs, outputs=output)
 
         return mlflow.pyfunc.log_model(
             name="model",

@@ -4,8 +4,8 @@ bundle:
 include:
   - resources/*.yml
 
-# Só o código de produção vai para o workspace no deploy. Os notebooks de exploração
-# (notebooks/exploration) ficam no Git / Git folder, fora do job.
+# Só o código de produção vai para o workspace no deploy (biblioteca, tarefas dos jobs e o painel). Os notebooks de
+# exploração (notebooks/exploration) ficam no Git / Git folder, fora dos jobs.
 sync:
   include:
     - src/**
@@ -26,6 +26,14 @@ variables:
   schema:
     description: Schema criado pelo bundle para tabelas, Volume, modelo e inference table
     default: credit_scoring
+  safra:
+    description: Rótulo da safra de produção escorada e monitorada (o cs-test.csv faz esse papel)
+    default: "202610"
+  min_recall:
+    description: >-
+      Regra de negócio do threshold — o maior corte que captura pelo menos esta fração dos inadimplentes na validação.
+      Escolhido com a tabela de cortes (custo dos erros, % de reprovados, precisão) logada no MLflow.
+    default: 0.70
   min_auc:
     description: Portão de qualidade — AUC mínima no teste para virar @champion
     default: 0.85
@@ -37,6 +45,13 @@ variables:
     default: 0.05
   endpoint_name:
     default: credit-scoring
+  enable_inference_table:
+    description: Log de requisições do endpoint (AI Gateway). Não suportado no Free Edition; use "true" em workspaces pagos
+    default: "false"
+  warehouse_id:
+    description: SQL warehouse do painel AI/BI (o Free Edition cria o "Serverless Starter Warehouse")
+    lookup:
+      warehouse: Serverless Starter Warehouse
   notification_email:
     description: Quem recebe e-mail de falha
     default: ${workspace.current_user.userName}

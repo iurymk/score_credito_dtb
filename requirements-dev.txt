@@ -3,6 +3,8 @@ mlflow==3.13.0
 scikit-learn==1.9.1
 xgboost==3.4.1
 shap==0.53.0
+optbinning==1.0.0
+statsmodels==0.15.0
 pandas==2.3.3
 numpy==2.5.4
 scipy==1.18.1
@@ -10,3 +12,5 @@ matplotlib
 seaborn
 databricks-sdk==0.67.0
 pytest
+nbconvert
+ipykernel

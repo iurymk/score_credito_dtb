@@ -1,4 +1,4 @@
-"""Métricas de crédito, escolha do threshold, fairness por segmento, impacto financeiro e portões de qualidade."""
+"""Métricas de crédito, análise por faixas e cortes, escolha do threshold, fairness, impacto financeiro e portões."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import ks_2samp
 from sklearn.metrics import (
+    average_precision_score,
     confusion_matrix,
     f1_score,
     precision_recall_curve,
@@ -38,6 +39,26 @@ def best_f1_threshold(y_true, y_proba) -> float:
     return float(thresholds[int(np.argmax(f1[:-1]))])
 
 
+def threshold_for_min_recall(y_true, y_proba, min_recall: float) -> float:
+    """Regra de negócio: o maior corte que ainda captura pelo menos ``min_recall`` dos inadimplentes.
+
+    Maior corte = menos clientes reprovados (menos bons pagadores perdidos) para a meta de captura definida.
+    """
+    _, recalls, thresholds = precision_recall_curve(y_true, y_proba)
+    ok = np.flatnonzero(recalls[:-1] >= min_recall)
+    if not len(ok):
+        raise ValueError(f"nenhum corte atinge recall >= {min_recall}")
+    return float(thresholds[ok.max()])
+
+
+def lift_top(y_true, y_proba, fraction: float) -> float:
+    """Taxa de inadimplência dos ``fraction`` mais arriscados dividida pela taxa média da base."""
+    y_true, y_proba = np.asarray(y_true), np.asarray(y_proba)
+    n = max(1, int(round(len(y_true) * fraction)))
+    top = y_true[np.argsort(-y_proba, kind="stable")[:n]]
+    return float(top.mean() / y_true.mean())
+
+
 def classification_metrics(y_true, y_proba, threshold: float) -> dict:
     y_pred = (np.asarray(y_proba) >= threshold).astype(int)
     auc = roc_auc_score(y_true, y_proba)
@@ -46,11 +67,68 @@ def classification_metrics(y_true, y_proba, threshold: float) -> dict:
         "auc": float(auc),
         "gini": float(2 * auc - 1),
         "ks": ks_statistic(y_true, y_proba),
+        # PR-AUC: mais informativa que a ROC-AUC com classes desbalanceadas (referência = taxa de positivos)
+        "pr_auc": float(average_precision_score(y_true, y_proba)),
+        "lift_top5": lift_top(y_true, y_proba, 0.05),
+        "lift_top10": lift_top(y_true, y_proba, 0.10),
         "f1": float(f1_score(y_true, y_pred, zero_division=0)),
         "precision": float(precision_score(y_true, y_pred, zero_division=0)),
         "recall": float(recall_score(y_true, y_pred, zero_division=0)),
         "tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp),
     }
+
+
+def tabela_faixas(y_true, y_proba, n_faixas: int = 40) -> pd.DataFrame:
+    """Clientes ordenados do maior para o menor risco em ``n_faixas`` faixas de mesmo tamanho.
+
+    Por faixa: inadimplentes, taxa, lift e, acumulado, % de maus e bons capturados, KS e precisão —
+    a tabela usada para discutir com o negócio onde cortar.
+    """
+    df = pd.DataFrame({"score": np.asarray(y_proba), "y": np.asarray(y_true)})
+    df = df.sort_values("score", ascending=False, kind="stable").reset_index(drop=True)
+    tamanho = len(df) // n_faixas
+    df["faixa"] = (np.arange(len(df)) // tamanho).clip(0, n_faixas - 1) + 1
+
+    taxa_media = df["y"].mean()
+    t = df.groupby("faixa").agg(
+        score_min=("score", "min"), score_max=("score", "max"), qtd_total=("y", "size"), qtd_maus=("y", "sum")
+    ).reset_index()
+    t["qtd_bons"] = t["qtd_total"] - t["qtd_maus"]
+    t["taxa_maus"] = t["qtd_maus"] / t["qtd_total"]
+    t["lift"] = t["taxa_maus"] / taxa_media
+    t["pct_maus_acum"] = t["qtd_maus"].cumsum() / t["qtd_maus"].sum()
+    t["pct_bons_acum"] = t["qtd_bons"].cumsum() / t["qtd_bons"].sum()
+    t["ks"] = t["pct_maus_acum"] - t["pct_bons_acum"]
+    t["pct_base_acum"] = t["qtd_total"].cumsum() / t["qtd_total"].sum()
+    t["precisao_acum"] = t["qtd_maus"].cumsum() / t["qtd_total"].cumsum()
+    return t
+
+
+def tabela_cortes(y_true, y_proba, n_faixas: int = 40) -> pd.DataFrame:
+    """Métricas para cada ponto de corte candidato (o menor score de cada faixa), do mais restritivo ao mais permissivo.
+
+    Classe positiva = inadimplente (REPROVAR). Para cada corte: % da base reprovada, precisão e recall dos
+    inadimplentes e dos adimplentes, e o custo dos erros com as premissas financeiras de ``config``.
+    """
+    y_true, y_proba = np.asarray(y_true), np.asarray(y_proba)
+    cortes = tabela_faixas(y_true, y_proba, n_faixas)["score_min"].to_numpy()
+    rows = []
+    for corte in cortes:
+        pred = y_proba >= corte
+        tp, fp = int((pred & (y_true == 1)).sum()), int((pred & (y_true == 0)).sum())
+        fn, tn = int((~pred & (y_true == 1)).sum()), int((~pred & (y_true == 0)).sum())
+        rows.append({
+            "threshold": float(corte),
+            "pct_reprovados": pred.mean(),
+            "precisao_maus": tp / (tp + fp) if tp + fp else 0.0,
+            "recall_maus": tp / (tp + fn) if tp + fn else 0.0,
+            "precisao_bons": tn / (tn + fn) if tn + fn else 0.0,
+            "recall_bons": tn / (tn + fp) if tn + fp else 0.0,
+            "acuracia": (tp + tn) / len(y_true),
+            "tp": tp, "fp": fp, "fn": fn, "tn": tn,
+            "custo_erros": financial_impact(fn, fp)["custo_total_erros"],
+        })
+    return pd.DataFrame(rows)
 
 
 def segment_auc(raw: pd.DataFrame, y_true, y_proba) -> pd.DataFrame:

@@ -1,6 +1,6 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 5b · Endpoint em tempo real (CPU)
+# MAGIC # Esteira de treino · 5 · Endpoint em tempo real (CPU)
 # MAGIC Cria ou atualiza um endpoint de Model Serving para a versão `@champion` — sem downtime na atualização (a versão
 # MAGIC antiga responde até a nova ficar pronta). A inference table grava toda requisição/resposta em Delta.
 # MAGIC Espera os **dois** sinais de prontidão e faz uma consulta de teste antes de declarar sucesso.
@@ -9,7 +9,7 @@
 
 import json, math, os, sys, time
 
-sys.path.insert(0, os.path.abspath(".."))
+sys.path.insert(0, os.path.abspath("../.."))
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import NotFound
@@ -52,7 +52,7 @@ except NotFound:
 if current is None:
     print(f"criando endpoint {endpoint_name} → {model_name} v{version}")
     # Inference table: toda requisição/resposta vai para <catalog>.<schema>.credit_endpoint_payload.
-    # Desligue com enable_inference_table=false se o workspace não suportar (ex.: algumas edições gratuitas).
+    # Desligada por padrão: o Databricks Free Edition não suporta inference tables (ligue em workspaces pagos).
     ai_gateway = AiGatewayConfig(
         inference_table_config=AiGatewayInferenceTableConfig(
             catalog_name=catalog, schema_name=schema, table_name_prefix="credit_endpoint", enabled=True
@@ -94,13 +94,19 @@ entities = w.serving_endpoints.get(endpoint_name).config.served_entities
 assert any(e.entity_version == version for e in entities), f"o endpoint não está servindo a v{version}: {entities}"
 
 # COMMAND ----------
-# MAGIC %md ## Consulta de teste com um cliente real do conjunto de teste
+# MAGIC %md ## Consulta de teste com um cliente real da safra de produção
 
 # COMMAND ----------
 
-row = spark.table(f"{catalog}.{schema}.silver_credit").where("split = 'test'").limit(1).toPandas().iloc[0]
-record = {col: (None if row[col] is None or (isinstance(row[col], float) and math.isnan(row[col])) else float(row[col]))
-          for col in c.MODEL_INPUT_COLUMNS}
+row = spark.table(f"{catalog}.{schema}.{c.SILVER_SAFRA}").limit(1).toPandas().iloc[0]
+def to_json_value(v):
+    """Como um sistema cliente enviaria: inteiro como inteiro, decimal como decimal, ausente como null."""
+    if v is None or (isinstance(v, float) and math.isnan(v)):
+        return None
+    return int(v) if float(v).is_integer() else float(v)
+
+
+record = {col: to_json_value(row[col]) for col in c.MODEL_INPUT_COLUMNS}
 resp = w.serving_endpoints.query(endpoint_name, dataframe_records=[record])
 pred = resp.predictions[0]
 print(json.dumps({"entrada": record, "saida": pred}, indent=2, ensure_ascii=False))

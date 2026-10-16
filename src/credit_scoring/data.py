@@ -16,15 +16,18 @@ MAX_NULL_FRACTION = {c.INCOME: 0.30, c.DEPENDENTS: 0.10}
 
 
 def read_training_csv(path: str) -> pd.DataFrame:
-    """Lê o ``cs-training.csv`` (a primeira coluna, sem nome, vira ``id``)."""
+    """Lê o ``cs-training.csv`` ou o ``cs-test.csv`` (a primeira coluna, sem nome, vira ``id``)."""
     df = pd.read_csv(path)
     return df.rename(columns={df.columns[0]: c.ID_COL})
 
 
-def check_quality(df: pd.DataFrame) -> dict:
-    """Falha rápido em problemas de dados, antes de qualquer treino. Retorna estatísticas resumidas."""
+def check_quality(df: pd.DataFrame, has_target: bool = True) -> dict:
+    """Falha rápido em problemas de dados, antes de qualquer treino ou escoragem. Retorna estatísticas resumidas.
+
+    ``has_target=False`` para a safra de produção, que ainda não tem o desfecho.
+    """
     errors = []
-    expected = [c.ID_COL, c.TARGET, *c.RAW_COLUMNS]
+    expected = [c.ID_COL, *([c.TARGET] if has_target else []), *c.RAW_COLUMNS]
     missing = [col for col in expected if col not in df.columns]
     if missing:
         raise ValueError(f"colunas ausentes no dataset: {missing}")
@@ -34,14 +37,16 @@ def check_quality(df: pd.DataFrame) -> dict:
         errors.append(f"apenas {n} linhas (mínimo {MIN_ROWS})")
     if df[c.ID_COL].duplicated().any():
         errors.append(f"{int(df[c.ID_COL].duplicated().sum())} ids duplicados")
-    if not set(df[c.TARGET].dropna().unique()) <= {0, 1}:
-        errors.append(f"target não binário: {sorted(df[c.TARGET].dropna().unique())[:10]}")
-    if df[c.TARGET].isna().any():
-        errors.append(f"{int(df[c.TARGET].isna().sum())} linhas sem target")
 
-    target_rate = float(df[c.TARGET].mean())
-    if not TARGET_RATE_RANGE[0] <= target_rate <= TARGET_RATE_RANGE[1]:
-        errors.append(f"taxa de inadimplência {target_rate:.2%} fora de {TARGET_RATE_RANGE}")
+    target_rate = None
+    if has_target:
+        if not set(df[c.TARGET].dropna().unique()) <= {0, 1}:
+            errors.append(f"target não binário: {sorted(df[c.TARGET].dropna().unique())[:10]}")
+        if df[c.TARGET].isna().any():
+            errors.append(f"{int(df[c.TARGET].isna().sum())} linhas sem target")
+        target_rate = float(df[c.TARGET].mean())
+        if not TARGET_RATE_RANGE[0] <= target_rate <= TARGET_RATE_RANGE[1]:
+            errors.append(f"taxa de inadimplência {target_rate:.2%} fora de {TARGET_RATE_RANGE}")
 
     null_fraction = {col: float(df[col].isna().mean()) for col in c.RAW_COLUMNS}
     for col, frac in null_fraction.items():
@@ -57,7 +62,7 @@ def check_quality(df: pd.DataFrame) -> dict:
         raise ValueError("validação de qualidade falhou:\n  - " + "\n  - ".join(errors))
     return {
         "n_rows": n,
-        "target_rate": round(target_rate, 4),
+        "target_rate": round(target_rate, 4) if target_rate is not None else None,
         "null_fraction": {k: round(v, 4) for k, v in null_fraction.items() if v > 0},
         "n_age_zero": int((df[c.AGE] == 0).sum()),
     }
