@@ -37,7 +37,7 @@ resources:
       environments: &environment
         - environment_key: default
           spec:
-            environment_version: "4"
+            environment_version: "5"
             dependencies:
               - mlflow==3.13.0
               - scikit-learn==1.9.1
