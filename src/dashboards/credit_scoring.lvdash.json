@@ -1,6 +1,58 @@
 {
   "datasets": [
     {
+      "name": "ds_desempenho",
+      "displayName": "Desempenho do @champion",
+      "queryLines": [
+        "WITH champ AS (SELECT model_version FROM gold_desempenho_modelo WHERE gate_status = 'aprovado' ORDER BY avaliado_em DESC LIMIT 1) ",
+        "SELECT CONCAT('v', d.model_version) AS modelo, ROUND(d.auc, 3) AS auc, ROUND(d.ks, 3) AS ks, ",
+        "ROUND(d.pr_auc, 3) AS pr_auc, ROUND(d.recall, 3) AS recall, ROUND(d.precision, 3) AS precisao, ",
+        "ROUND(d.pct_reprovados, 3) AS pct_reprovados, ROUND(d.threshold, 3) AS threshold, d.gate_status, ",
+        "d.n_teste FROM gold_desempenho_modelo d JOIN champ USING (model_version)"
+      ]
+    },
+    {
+      "name": "ds_faixas",
+      "displayName": "Faixas de risco (teste)",
+      "queryLines": [
+        "WITH champ AS (SELECT model_version FROM gold_desempenho_modelo WHERE gate_status = 'aprovado' ORDER BY avaliado_em DESC LIMIT 1) ",
+        "SELECT LPAD(CAST(f.faixa AS STRING), 2, '0') AS faixa, ROUND(f.taxa_maus, 4) AS taxa_maus, ",
+        "ROUND(f.lift, 2) AS lift FROM gold_desempenho_faixas f JOIN champ USING (model_version) ORDER BY f.faixa"
+      ]
+    },
+    {
+      "name": "ds_ks",
+      "displayName": "Curva KS (teste)",
+      "queryLines": [
+        "WITH champ AS (SELECT model_version FROM gold_desempenho_modelo WHERE gate_status = 'aprovado' ORDER BY avaliado_em DESC LIMIT 1), f AS (SELECT x.* FROM gold_desempenho_faixas x JOIN champ USING (model_version)) ",
+        "SELECT LPAD(CAST(faixa AS STRING), 2, '0') AS faixa, '% dos maus capturados' AS serie, ",
+        "ROUND(pct_maus_acum, 4) AS valor FROM f UNION ALL ",
+        "SELECT LPAD(CAST(faixa AS STRING), 2, '0'), '% dos bons reprovados', ROUND(pct_bons_acum, 4) FROM f UNION ALL ",
+        "SELECT LPAD(CAST(faixa AS STRING), 2, '0'), 'KS (diferença)', ROUND(ks, 4) FROM f"
+      ]
+    },
+    {
+      "name": "ds_cortes",
+      "displayName": "Pontos de corte (teste)",
+      "queryLines": [
+        "WITH champ AS (SELECT model_version FROM gold_desempenho_modelo WHERE gate_status = 'aprovado' ORDER BY avaliado_em DESC LIMIT 1) ",
+        "SELECT ROUND(c.threshold, 3) AS threshold, ROUND(c.pct_reprovados, 3) AS pct_reprovados, ",
+        "ROUND(c.precisao_maus, 3) AS precisao, ROUND(c.recall_maus, 3) AS recall_maus, ",
+        "ROUND(c.recall_bons, 3) AS recall_bons, CAST(c.custo_erros AS BIGINT) AS custo_erros_rs, ",
+        "CASE WHEN c.threshold_escolhido THEN '◀ corte do modelo' ELSE '' END AS observacao ",
+        "FROM gold_desempenho_cortes c JOIN champ USING (model_version) ORDER BY c.threshold DESC"
+      ]
+    },
+    {
+      "name": "ds_versoes",
+      "displayName": "Histórico de versões",
+      "queryLines": [
+        "SELECT CONCAT('v', model_version) AS modelo, ROUND(auc, 3) AS auc, ROUND(ks, 3) AS ks, ",
+        "ROUND(pr_auc, 3) AS pr_auc, ROUND(threshold, 3) AS threshold, gate_status, gate_falhas, avaliado_em ",
+        "FROM gold_desempenho_modelo ORDER BY avaliado_em DESC"
+      ]
+    },
+    {
       "name": "ds_kpis",
       "displayName": "Indicadores da safra",
       "queryLines": [
@@ -11,8 +63,22 @@
         "(SELECT ROUND(MAX(r.psi), 4) FROM gold_monitoramento_resumo r JOIN ult u USING (safra, model_version) ",
         " WHERE r.variavel = 'score_modelo') AS psi_score, ",
         "(SELECT COUNT(*) FROM gold_monitoramento_resumo r JOIN ult u USING (safra, model_version) ",
+        " WHERE r.variavel <> 'score_modelo') AS variaveis_monitoradas, ",
+        "(SELECT COUNT(*) FROM gold_monitoramento_resumo r JOIN ult u USING (safra, model_version) ",
         " WHERE r.status <> 'estável') AS variaveis_em_alerta ",
         "FROM s"
+      ]
+    },
+    {
+      "name": "ds_status",
+      "displayName": "Status da distribuição",
+      "queryLines": [
+        "WITH ult AS (SELECT safra, model_version FROM gold_monitoramento_resumo ORDER BY monitored_at DESC LIMIT 1), r AS (SELECT x.* FROM gold_monitoramento_resumo x JOIN ult USING (safra, model_version) ",
+        " WHERE x.variavel <> 'score_modelo' ORDER BY x.psi DESC LIMIT 1) ",
+        "SELECT CASE WHEN r.status = 'estável' ",
+        "THEN CONCAT('✅ Todas as variáveis estáveis — maior PSI: ', r.variavel, ' (', FORMAT_NUMBER(r.psi, 4), ')') ",
+        "ELSE CONCAT('⚠️ Atenção na variável ', r.variavel, ' (PSI ', FORMAT_NUMBER(r.psi, 2), ' — ', r.status, ')') ",
+        "END AS status FROM r"
       ]
     },
     {
@@ -25,6 +91,15 @@
       ]
     },
     {
+      "name": "ds_psi_long",
+      "displayName": "Esperado × atual por faixa",
+      "queryLines": [
+        "WITH ult AS (SELECT safra, model_version FROM gold_monitoramento_resumo ORDER BY monitored_at DESC LIMIT 1), p AS (SELECT x.* FROM gold_monitoramento_psi x JOIN ult USING (safra, model_version)) ",
+        "SELECT variavel, faixa, 'Treino (esperado)' AS base, ROUND(pct_esperado, 4) AS pct FROM p UNION ALL ",
+        "SELECT variavel, faixa, 'Safra (atual)', ROUND(pct_atual, 4) FROM p"
+      ]
+    },
+    {
       "name": "ds_psi_detalhe",
       "displayName": "PSI por faixa",
       "queryLines": [
@@ -32,6 +107,24 @@
         "SELECT p.variavel, p.faixa, ROUND(p.pct_esperado, 4) AS pct_esperado, ROUND(p.pct_atual, 4) AS pct_atual, ",
         "ROUND(p.psi, 5) AS psi FROM gold_monitoramento_psi p JOIN ult USING (safra, model_version) ",
         "ORDER BY p.variavel, p.faixa"
+      ]
+    },
+    {
+      "name": "ds_decisao",
+      "displayName": "Decisões da safra",
+      "queryLines": [
+        "WITH ult AS (SELECT safra, model_version FROM gold_credit_scores ORDER BY scored_at DESC LIMIT 1) ",
+        "SELECT g.decisao, COUNT(*) AS clientes FROM gold_credit_scores g JOIN ult USING (safra, model_version) ",
+        "GROUP BY g.decisao"
+      ]
+    },
+    {
+      "name": "ds_score",
+      "displayName": "Distribuição do score",
+      "queryLines": [
+        "WITH ult AS (SELECT safra, model_version FROM gold_credit_scores ORDER BY scored_at DESC LIMIT 1) ",
+        "SELECT CAST(FLOOR(g.score / 50) * 50 AS INT) AS faixa_score, g.decisao, COUNT(*) AS clientes ",
+        "FROM gold_credit_scores g JOIN ult USING (safra, model_version) GROUP BY 1, 2 ORDER BY 1"
       ]
     },
     {
@@ -53,38 +146,20 @@
         "ROUND(b.iv, 4) AS iv, ROUND(b.lift, 2) AS lift ",
         "FROM gold_bivariadas b JOIN ult USING (model_version) ORDER BY b.variavel, b.faixa"
       ]
-    },
-    {
-      "name": "ds_decisao",
-      "displayName": "Decisões da safra",
-      "queryLines": [
-        "WITH ult AS (SELECT safra, model_version FROM gold_credit_scores ORDER BY scored_at DESC LIMIT 1) ",
-        "SELECT g.decisao, COUNT(*) AS clientes FROM gold_credit_scores g JOIN ult USING (safra, model_version) ",
-        "GROUP BY g.decisao"
-      ]
-    },
-    {
-      "name": "ds_score",
-      "displayName": "Distribuição do score",
-      "queryLines": [
-        "WITH ult AS (SELECT safra, model_version FROM gold_credit_scores ORDER BY scored_at DESC LIMIT 1) ",
-        "SELECT CAST(FLOOR(g.score / 50) * 50 AS INT) AS faixa_score, COUNT(*) AS clientes ",
-        "FROM gold_credit_scores g JOIN ult USING (safra, model_version) GROUP BY 1 ORDER BY 1"
-      ]
     }
   ],
   "pages": [
     {
-      "name": "monitoramento",
-      "displayName": "Monitoramento (PSI)",
+      "name": "desempenho",
+      "displayName": "Desempenho do modelo",
       "layout": [
         {
           "widget": {
-            "name": "t_mon",
+            "name": "t_des",
             "multilineTextboxSpec": {
               "lines": [
-                "## Monitoramento de estabilidade — treino (esperado) × safra (atual)",
-                "PSI < 0,10 estável · 0,10–0,25 atenção · > 0,25 instável. Faixas das features: optimal binning do treino; score: decis do treino."
+                "## Desempenho do modelo em produção (@champion) — conjunto de teste",
+                "Clientes nunca vistos no treino nem na escolha do threshold. O threshold segue a regra de negócio (maior corte que captura o recall mínimo de inadimplentes na validação)."
               ]
             }
           },
@@ -92,6 +167,952 @@
             "x": 0,
             "y": 0,
             "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "k_modelo",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_desempenho",
+                  "fields": [
+                    {
+                      "name": "modelo",
+                      "expression": "`modelo`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "modelo",
+                  "displayName": "Modelo"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Modelo"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k_auc",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_desempenho",
+                  "fields": [
+                    {
+                      "name": "auc",
+                      "expression": "`auc`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "auc",
+                  "displayName": "AUC"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "AUC"
+              }
+            }
+          },
+          "position": {
+            "x": 1,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k_ks",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_desempenho",
+                  "fields": [
+                    {
+                      "name": "ks",
+                      "expression": "`ks`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "ks",
+                  "displayName": "KS"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "KS"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k_prauc",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_desempenho",
+                  "fields": [
+                    {
+                      "name": "pr_auc",
+                      "expression": "`pr_auc`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "pr_auc",
+                  "displayName": "PR-AUC"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "PR-AUC"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k_recall",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_desempenho",
+                  "fields": [
+                    {
+                      "name": "recall",
+                      "expression": "`recall`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "recall",
+                  "displayName": "Recall (inadimplentes)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Recall (inadimplentes)"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k_reprov",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_desempenho",
+                  "fields": [
+                    {
+                      "name": "pct_reprovados",
+                      "expression": "`pct_reprovados`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "pct_reprovados",
+                  "displayName": "% reprovados"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "% reprovados"
+              }
+            }
+          },
+          "position": {
+            "x": 5,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "b_faixas",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_faixas",
+                  "fields": [
+                    {
+                      "name": "faixa",
+                      "expression": "`faixa`"
+                    },
+                    {
+                      "name": "taxa_maus",
+                      "expression": "`taxa_maus`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "faixa",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "faixa"
+                },
+                "y": {
+                  "fieldName": "taxa_maus",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "taxa_maus"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Taxa de inadimplência por faixa de risco (01 = 2,5% mais arriscados)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 3,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "l_ks",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_ks",
+                  "fields": [
+                    {
+                      "name": "faixa",
+                      "expression": "`faixa`"
+                    },
+                    {
+                      "name": "valor",
+                      "expression": "`valor`"
+                    },
+                    {
+                      "name": "serie",
+                      "expression": "`serie`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "faixa",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "faixa"
+                },
+                "y": {
+                  "fieldName": "valor",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "valor"
+                },
+                "color": {
+                  "fieldName": "serie",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "serie"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Curva KS: maus capturados × bons reprovados (acumulado)"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 5,
+            "width": 3,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "t_cortes",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cortes",
+                  "fields": [
+                    {
+                      "name": "threshold",
+                      "expression": "`threshold`"
+                    },
+                    {
+                      "name": "pct_reprovados",
+                      "expression": "`pct_reprovados`"
+                    },
+                    {
+                      "name": "precisao",
+                      "expression": "`precisao`"
+                    },
+                    {
+                      "name": "recall_maus",
+                      "expression": "`recall_maus`"
+                    },
+                    {
+                      "name": "recall_bons",
+                      "expression": "`recall_bons`"
+                    },
+                    {
+                      "name": "custo_erros_rs",
+                      "expression": "`custo_erros_rs`"
+                    },
+                    {
+                      "name": "observacao",
+                      "expression": "`observacao`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "threshold",
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 0,
+                    "title": "threshold",
+                    "displayName": "threshold",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "fieldName": "pct_reprovados",
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 1,
+                    "title": "pct_reprovados",
+                    "displayName": "pct_reprovados",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "fieldName": "precisao",
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 2,
+                    "title": "precisao",
+                    "displayName": "precisao",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "fieldName": "recall_maus",
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 3,
+                    "title": "recall_maus",
+                    "displayName": "recall_maus",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "fieldName": "recall_bons",
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 4,
+                    "title": "recall_bons",
+                    "displayName": "recall_bons",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "fieldName": "custo_erros_rs",
+                    "type": "integer",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 5,
+                    "title": "custo_erros_rs",
+                    "displayName": "custo_erros_rs",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true
+                  },
+                  {
+                    "fieldName": "observacao",
+                    "type": "string",
+                    "displayAs": "string",
+                    "visible": true,
+                    "order": 6,
+                    "title": "observacao",
+                    "displayName": "observacao",
+                    "alignContent": "left",
+                    "allowSearch": true,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true
+                  }
+                ]
+              },
+              "invisibleColumns": [],
+              "allowHTMLByDefault": false,
+              "itemsPerPage": 25,
+              "paginationSize": "default",
+              "condensed": true,
+              "withRowNumber": false,
+              "frame": {
+                "showTitle": true,
+                "title": "Pontos de corte: o que cada threshold significa para o negócio"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 12,
+            "width": 4,
+            "height": 9
+          }
+        },
+        {
+          "widget": {
+            "name": "t_versoes",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_versoes",
+                  "fields": [
+                    {
+                      "name": "modelo",
+                      "expression": "`modelo`"
+                    },
+                    {
+                      "name": "auc",
+                      "expression": "`auc`"
+                    },
+                    {
+                      "name": "ks",
+                      "expression": "`ks`"
+                    },
+                    {
+                      "name": "pr_auc",
+                      "expression": "`pr_auc`"
+                    },
+                    {
+                      "name": "gate_status",
+                      "expression": "`gate_status`"
+                    },
+                    {
+                      "name": "gate_falhas",
+                      "expression": "`gate_falhas`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "modelo",
+                    "type": "string",
+                    "displayAs": "string",
+                    "visible": true,
+                    "order": 0,
+                    "title": "modelo",
+                    "displayName": "modelo",
+                    "alignContent": "left",
+                    "allowSearch": true,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true
+                  },
+                  {
+                    "fieldName": "auc",
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 1,
+                    "title": "auc",
+                    "displayName": "auc",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "fieldName": "ks",
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 2,
+                    "title": "ks",
+                    "displayName": "ks",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "fieldName": "pr_auc",
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 3,
+                    "title": "pr_auc",
+                    "displayName": "pr_auc",
+                    "alignContent": "right",
+                    "allowSearch": false,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "fieldName": "gate_status",
+                    "type": "string",
+                    "displayAs": "string",
+                    "visible": true,
+                    "order": 4,
+                    "title": "gate_status",
+                    "displayName": "gate_status",
+                    "alignContent": "left",
+                    "allowSearch": true,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true
+                  },
+                  {
+                    "fieldName": "gate_falhas",
+                    "type": "string",
+                    "displayAs": "string",
+                    "visible": true,
+                    "order": 5,
+                    "title": "gate_falhas",
+                    "displayName": "gate_falhas",
+                    "alignContent": "left",
+                    "allowSearch": true,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true
+                  }
+                ]
+              },
+              "invisibleColumns": [],
+              "allowHTMLByDefault": false,
+              "itemsPerPage": 25,
+              "paginationSize": "default",
+              "condensed": true,
+              "withRowNumber": false,
+              "frame": {
+                "showTitle": true,
+                "title": "Histórico de versões avaliadas"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 12,
+            "width": 2,
+            "height": 9
+          }
+        }
+      ]
+    },
+    {
+      "name": "distribuicao",
+      "displayName": "Distribuição das variáveis",
+      "layout": [
+        {
+          "widget": {
+            "name": "t_dist",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Estabilidade da população — treino (esperado) × safra (atual)",
+                "PSI por variável do modelo e do score. Faixas das variáveis: optimal binning do treino; score: decis do treino."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 5,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "f_var_psi",
+            "queries": [
+              {
+                "name": "f_var_psi_ds_psi_long",
+                "query": {
+                  "datasetName": "ds_psi_long",
+                  "fields": [
+                    {
+                      "name": "variavel",
+                      "expression": "`variavel`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_var_psi_ds_psi_detalhe",
+                "query": {
+                  "datasetName": "ds_psi_detalhe",
+                  "fields": [
+                    {
+                      "name": "variavel",
+                      "expression": "`variavel`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-single-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "variavel",
+                    "displayName": "variavel",
+                    "queryName": "f_var_psi_ds_psi_long"
+                  },
+                  {
+                    "fieldName": "variavel",
+                    "displayName": "variavel",
+                    "queryName": "f_var_psi_ds_psi_detalhe"
+                  }
+                ]
+              },
+              "selection": {
+                "defaultSelection": {
+                  "values": {
+                    "dataType": "STRING",
+                    "values": [
+                      {
+                        "value": "score_modelo"
+                      }
+                    ]
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Variável"
+              }
+            }
+          },
+          "position": {
+            "x": 5,
+            "y": 0,
+            "width": 1,
             "height": 2
           }
         },
@@ -137,47 +1158,7 @@
         },
         {
           "widget": {
-            "name": "k_modelo",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_kpis",
-                  "fields": [
-                    {
-                      "name": "modelo",
-                      "expression": "`modelo`"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "counter",
-              "encodings": {
-                "value": {
-                  "fieldName": "modelo",
-                  "displayName": "Modelo (@champion)"
-                }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Modelo (@champion)"
-              }
-            }
-          },
-          "position": {
-            "x": 1,
-            "y": 2,
-            "width": 1,
-            "height": 3
-          }
-        },
-        {
-          "widget": {
-            "name": "k_clientes",
+            "name": "k_obs",
             "queries": [
               {
                 "name": "main_query",
@@ -199,17 +1180,17 @@
               "encodings": {
                 "value": {
                   "fieldName": "clientes",
-                  "displayName": "Clientes escorados"
+                  "displayName": "Total de observações"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Clientes escorados"
+                "title": "Total de observações"
               }
             }
           },
           "position": {
-            "x": 2,
+            "x": 1,
             "y": 2,
             "width": 1,
             "height": 3
@@ -217,7 +1198,7 @@
         },
         {
           "widget": {
-            "name": "k_reprov",
+            "name": "k_vars",
             "queries": [
               {
                 "name": "main_query",
@@ -225,8 +1206,8 @@
                   "datasetName": "ds_kpis",
                   "fields": [
                     {
-                      "name": "pct_reprovados",
-                      "expression": "`pct_reprovados`"
+                      "name": "variaveis_monitoradas",
+                      "expression": "`variaveis_monitoradas`"
                     }
                   ],
                   "disaggregated": true
@@ -238,18 +1219,18 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "pct_reprovados",
-                  "displayName": "% reprovados"
+                  "fieldName": "variaveis_monitoradas",
+                  "displayName": "Variáveis monitoradas"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "% reprovados"
+                "title": "Variáveis monitoradas"
               }
             }
           },
           "position": {
-            "x": 3,
+            "x": 2,
             "y": 2,
             "width": 1,
             "height": 3
@@ -289,7 +1270,7 @@
             }
           },
           "position": {
-            "x": 4,
+            "x": 3,
             "y": 2,
             "width": 1,
             "height": 3
@@ -329,10 +1310,103 @@
             }
           },
           "position": {
+            "x": 4,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "t_legenda",
+            "multilineTextboxSpec": {
+              "lines": [
+                "**Faixas de PSI**",
+                "",
+                "🟢 < 0,10 — estável",
+                "",
+                "🟡 0,10 a 0,25 — atenção",
+                "",
+                "🔴 > 0,25 — crítico"
+              ]
+            }
+          },
+          "position": {
             "x": 5,
             "y": 2,
             "width": 1,
             "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "t_status",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_status",
+                  "fields": [
+                    {
+                      "name": "status",
+                      "expression": "`status`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "status",
+                    "type": "string",
+                    "displayAs": "string",
+                    "visible": true,
+                    "order": 0,
+                    "title": "status",
+                    "displayName": "status",
+                    "alignContent": "left",
+                    "allowSearch": true,
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true
+                  }
+                ]
+              },
+              "invisibleColumns": [],
+              "allowHTMLByDefault": false,
+              "itemsPerPage": 25,
+              "paginationSize": "default",
+              "condensed": true,
+              "withRowNumber": false,
+              "frame": {
+                "showTitle": true,
+                "title": "Status da distribuição"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 6,
+            "height": 2
           }
         },
         {
@@ -389,45 +1463,37 @@
               },
               "frame": {
                 "showTitle": true,
-                "title": "PSI por variável"
+                "title": "Top variáveis por PSI"
               }
             }
           },
           "position": {
             "x": 0,
-            "y": 5,
+            "y": 7,
             "width": 3,
-            "height": 8
+            "height": 9
           }
         },
         {
           "widget": {
-            "name": "t_psi_resumo",
+            "name": "l_psi",
             "queries": [
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_psi_resumo",
+                  "datasetName": "ds_psi_long",
                   "fields": [
                     {
-                      "name": "variavel",
-                      "expression": "`variavel`"
+                      "name": "faixa",
+                      "expression": "`faixa`"
                     },
                     {
-                      "name": "psi",
-                      "expression": "`psi`"
+                      "name": "pct",
+                      "expression": "`pct`"
                     },
                     {
-                      "name": "status",
-                      "expression": "`status`"
-                    },
-                    {
-                      "name": "safra",
-                      "expression": "`safra`"
-                    },
-                    {
-                      "name": "model_version",
-                      "expression": "`model_version`"
+                      "name": "base",
+                      "expression": "`base`"
                     }
                   ],
                   "disaggregated": true
@@ -435,165 +1501,42 @@
               }
             ],
             "spec": {
-              "version": 1,
-              "widgetType": "table",
+              "version": 3,
+              "widgetType": "line",
               "encodings": {
-                "columns": [
-                  {
-                    "fieldName": "variavel",
-                    "type": "string",
-                    "displayAs": "string",
-                    "visible": true,
-                    "order": 0,
-                    "title": "variavel",
-                    "displayName": "variavel",
-                    "alignContent": "left",
-                    "allowSearch": true,
-                    "allowHTML": false,
-                    "highlightLinks": false,
-                    "useMonospaceFont": false,
-                    "preserveWhitespace": false,
-                    "booleanValues": [
-                      "false",
-                      "true"
-                    ],
-                    "imageUrlTemplate": "{{ @ }}",
-                    "imageTitleTemplate": "{{ @ }}",
-                    "imageWidth": "",
-                    "imageHeight": "",
-                    "linkUrlTemplate": "{{ @ }}",
-                    "linkTextTemplate": "{{ @ }}",
-                    "linkTitleTemplate": "{{ @ }}",
-                    "linkOpenInNewTab": true
+                "x": {
+                  "fieldName": "faixa",
+                  "scale": {
+                    "type": "categorical"
                   },
-                  {
-                    "fieldName": "psi",
-                    "type": "float",
-                    "displayAs": "number",
-                    "visible": true,
-                    "order": 1,
-                    "title": "psi",
-                    "displayName": "psi",
-                    "alignContent": "right",
-                    "allowSearch": false,
-                    "allowHTML": false,
-                    "highlightLinks": false,
-                    "useMonospaceFont": false,
-                    "preserveWhitespace": false,
-                    "booleanValues": [
-                      "false",
-                      "true"
-                    ],
-                    "imageUrlTemplate": "{{ @ }}",
-                    "imageTitleTemplate": "{{ @ }}",
-                    "imageWidth": "",
-                    "imageHeight": "",
-                    "linkUrlTemplate": "{{ @ }}",
-                    "linkTextTemplate": "{{ @ }}",
-                    "linkTitleTemplate": "{{ @ }}",
-                    "linkOpenInNewTab": true,
-                    "numberFormat": "0.0000"
+                  "displayName": "faixa"
+                },
+                "y": {
+                  "fieldName": "pct",
+                  "scale": {
+                    "type": "quantitative"
                   },
-                  {
-                    "fieldName": "status",
-                    "type": "string",
-                    "displayAs": "string",
-                    "visible": true,
-                    "order": 2,
-                    "title": "status",
-                    "displayName": "status",
-                    "alignContent": "left",
-                    "allowSearch": true,
-                    "allowHTML": false,
-                    "highlightLinks": false,
-                    "useMonospaceFont": false,
-                    "preserveWhitespace": false,
-                    "booleanValues": [
-                      "false",
-                      "true"
-                    ],
-                    "imageUrlTemplate": "{{ @ }}",
-                    "imageTitleTemplate": "{{ @ }}",
-                    "imageWidth": "",
-                    "imageHeight": "",
-                    "linkUrlTemplate": "{{ @ }}",
-                    "linkTextTemplate": "{{ @ }}",
-                    "linkTitleTemplate": "{{ @ }}",
-                    "linkOpenInNewTab": true
+                  "displayName": "pct"
+                },
+                "color": {
+                  "fieldName": "base",
+                  "scale": {
+                    "type": "categorical"
                   },
-                  {
-                    "fieldName": "safra",
-                    "type": "string",
-                    "displayAs": "string",
-                    "visible": true,
-                    "order": 3,
-                    "title": "safra",
-                    "displayName": "safra",
-                    "alignContent": "left",
-                    "allowSearch": true,
-                    "allowHTML": false,
-                    "highlightLinks": false,
-                    "useMonospaceFont": false,
-                    "preserveWhitespace": false,
-                    "booleanValues": [
-                      "false",
-                      "true"
-                    ],
-                    "imageUrlTemplate": "{{ @ }}",
-                    "imageTitleTemplate": "{{ @ }}",
-                    "imageWidth": "",
-                    "imageHeight": "",
-                    "linkUrlTemplate": "{{ @ }}",
-                    "linkTextTemplate": "{{ @ }}",
-                    "linkTitleTemplate": "{{ @ }}",
-                    "linkOpenInNewTab": true
-                  },
-                  {
-                    "fieldName": "model_version",
-                    "type": "string",
-                    "displayAs": "string",
-                    "visible": true,
-                    "order": 4,
-                    "title": "model_version",
-                    "displayName": "model_version",
-                    "alignContent": "left",
-                    "allowSearch": true,
-                    "allowHTML": false,
-                    "highlightLinks": false,
-                    "useMonospaceFont": false,
-                    "preserveWhitespace": false,
-                    "booleanValues": [
-                      "false",
-                      "true"
-                    ],
-                    "imageUrlTemplate": "{{ @ }}",
-                    "imageTitleTemplate": "{{ @ }}",
-                    "imageWidth": "",
-                    "imageHeight": "",
-                    "linkUrlTemplate": "{{ @ }}",
-                    "linkTextTemplate": "{{ @ }}",
-                    "linkTitleTemplate": "{{ @ }}",
-                    "linkOpenInNewTab": true
-                  }
-                ]
+                  "displayName": "base"
+                }
               },
-              "invisibleColumns": [],
-              "allowHTMLByDefault": false,
-              "itemsPerPage": 25,
-              "paginationSize": "default",
-              "condensed": true,
-              "withRowNumber": false,
               "frame": {
                 "showTitle": true,
-                "title": "Resumo por variável"
+                "title": "Distribuição por faixa da variável selecionada (% da base)"
               }
             }
           },
           "position": {
             "x": 3,
-            "y": 5,
+            "y": 7,
             "width": 3,
-            "height": 8
+            "height": 9
           }
         },
         {
@@ -783,15 +1726,364 @@
               "withRowNumber": false,
               "frame": {
                 "showTitle": true,
-                "title": "Esperado × atual por faixa"
+                "title": "Esperado × atual por faixa (variável selecionada)"
               }
             }
           },
           "position": {
             "x": 0,
-            "y": 13,
+            "y": 16,
             "width": 6,
-            "height": 9
+            "height": 7
+          }
+        }
+      ]
+    },
+    {
+      "name": "escoragem",
+      "displayName": "Escoragem",
+      "layout": [
+        {
+          "widget": {
+            "name": "t_esc",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Escoragem da safra com o @champion",
+                "Score 0–1000: quanto maior, menor o risco. Decisão pelo threshold registrado com o modelo."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "e_safra",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpis",
+                  "fields": [
+                    {
+                      "name": "safra",
+                      "expression": "`safra`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "safra",
+                  "displayName": "Safra"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Safra"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "e_modelo",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpis",
+                  "fields": [
+                    {
+                      "name": "modelo",
+                      "expression": "`modelo`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "modelo",
+                  "displayName": "Modelo"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Modelo"
+              }
+            }
+          },
+          "position": {
+            "x": 1,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "e_clientes",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpis",
+                  "fields": [
+                    {
+                      "name": "clientes",
+                      "expression": "`clientes`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "clientes",
+                  "displayName": "Clientes escorados"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Clientes escorados"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "e_reprov",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpis",
+                  "fields": [
+                    {
+                      "name": "pct_reprovados",
+                      "expression": "`pct_reprovados`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "pct_reprovados",
+                  "displayName": "% reprovados"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "% reprovados"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "e_score",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpis",
+                  "fields": [
+                    {
+                      "name": "score_medio",
+                      "expression": "`score_medio`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "score_medio",
+                  "displayName": "Score médio"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Score médio"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "b_decisao",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_decisao",
+                  "fields": [
+                    {
+                      "name": "decisao",
+                      "expression": "`decisao`"
+                    },
+                    {
+                      "name": "clientes",
+                      "expression": "`clientes`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "decisao",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "decisao"
+                },
+                "y": {
+                  "fieldName": "clientes",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "clientes"
+                },
+                "color": {
+                  "fieldName": "decisao",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "decisao"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Clientes por decisão"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 2,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "b_score",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_score",
+                  "fields": [
+                    {
+                      "name": "faixa_score",
+                      "expression": "`faixa_score`"
+                    },
+                    {
+                      "name": "clientes",
+                      "expression": "`clientes`"
+                    },
+                    {
+                      "name": "decisao",
+                      "expression": "`decisao`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "faixa_score",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "faixa_score"
+                },
+                "y": {
+                  "fieldName": "clientes",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "clientes"
+                },
+                "color": {
+                  "fieldName": "decisao",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "decisao"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Distribuição do score por decisão (faixas de 50 pontos)"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 5,
+            "width": 4,
+            "height": 7
           }
         }
       ]
@@ -805,15 +2097,70 @@
             "name": "t_biv",
             "multilineTextboxSpec": {
               "lines": [
-                "## Análise bivariada das features do modelo (optimal binning)",
-                "Por faixa: volume, taxa de inadimplência, odds (eventos por não-evento), WoE, IV e lift. IV: < 0,02 fraco · 0,02–0,10 médio · 0,10–0,30 forte · > 0,30 muito forte."
+                "## Análise bivariada das variáveis do modelo (optimal binning no treino)",
+                "Por faixa: volume, taxa de inadimplência, odds, WoE, IV e lift. IV: < 0,02 fraco · 0,02–0,10 médio · 0,10–0,30 forte · > 0,30 muito forte."
               ]
             }
           },
           "position": {
             "x": 0,
             "y": 0,
-            "width": 6,
+            "width": 5,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "f_var_biv",
+            "queries": [
+              {
+                "name": "f_var_biv_ds_bivariadas",
+                "query": {
+                  "datasetName": "ds_bivariadas",
+                  "fields": [
+                    {
+                      "name": "variavel",
+                      "expression": "`variavel`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-single-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "variavel",
+                    "displayName": "variavel",
+                    "queryName": "f_var_biv_ds_bivariadas"
+                  }
+                ]
+              },
+              "selection": {
+                "defaultSelection": {
+                  "values": {
+                    "dataType": "STRING",
+                    "values": [
+                      {
+                        "value": "RevolvingUtilizationOfUnsecuredLines"
+                      }
+                    ]
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Variável"
+              }
+            }
+          },
+          "position": {
+            "x": 5,
+            "y": 0,
+            "width": 1,
             "height": 2
           }
         },
@@ -873,6 +2220,114 @@
         },
         {
           "widget": {
+            "name": "b_taxa",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_bivariadas",
+                  "fields": [
+                    {
+                      "name": "faixa",
+                      "expression": "`faixa`"
+                    },
+                    {
+                      "name": "taxa_evento",
+                      "expression": "`taxa_evento`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "faixa",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "faixa"
+                },
+                "y": {
+                  "fieldName": "taxa_evento",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "taxa_evento"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Taxa de inadimplência por faixa (variável selecionada)"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 2,
+            "height": 5
+          }
+        },
+        {
+          "widget": {
+            "name": "b_lift",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_bivariadas",
+                  "fields": [
+                    {
+                      "name": "faixa",
+                      "expression": "`faixa`"
+                    },
+                    {
+                      "name": "lift",
+                      "expression": "`lift`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "faixa",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "faixa"
+                },
+                "y": {
+                  "fieldName": "lift",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "lift"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Lift por faixa (variável selecionada)"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 2,
+            "height": 5
+          }
+        },
+        {
+          "widget": {
             "name": "t_bivariadas",
             "queries": [
               {
@@ -895,14 +2350,6 @@
                     {
                       "name": "pct_total",
                       "expression": "`pct_total`"
-                    },
-                    {
-                      "name": "evento",
-                      "expression": "`evento`"
-                    },
-                    {
-                      "name": "nao_evento",
-                      "expression": "`nao_evento`"
                     },
                     {
                       "name": "taxa_evento",
@@ -1044,65 +2491,11 @@
                     "numberFormat": "0.0000"
                   },
                   {
-                    "fieldName": "evento",
-                    "type": "integer",
-                    "displayAs": "number",
-                    "visible": true,
-                    "order": 4,
-                    "title": "evento",
-                    "displayName": "evento",
-                    "alignContent": "right",
-                    "allowSearch": false,
-                    "allowHTML": false,
-                    "highlightLinks": false,
-                    "useMonospaceFont": false,
-                    "preserveWhitespace": false,
-                    "booleanValues": [
-                      "false",
-                      "true"
-                    ],
-                    "imageUrlTemplate": "{{ @ }}",
-                    "imageTitleTemplate": "{{ @ }}",
-                    "imageWidth": "",
-                    "imageHeight": "",
-                    "linkUrlTemplate": "{{ @ }}",
-                    "linkTextTemplate": "{{ @ }}",
-                    "linkTitleTemplate": "{{ @ }}",
-                    "linkOpenInNewTab": true
-                  },
-                  {
-                    "fieldName": "nao_evento",
-                    "type": "integer",
-                    "displayAs": "number",
-                    "visible": true,
-                    "order": 5,
-                    "title": "nao_evento",
-                    "displayName": "nao_evento",
-                    "alignContent": "right",
-                    "allowSearch": false,
-                    "allowHTML": false,
-                    "highlightLinks": false,
-                    "useMonospaceFont": false,
-                    "preserveWhitespace": false,
-                    "booleanValues": [
-                      "false",
-                      "true"
-                    ],
-                    "imageUrlTemplate": "{{ @ }}",
-                    "imageTitleTemplate": "{{ @ }}",
-                    "imageWidth": "",
-                    "imageHeight": "",
-                    "linkUrlTemplate": "{{ @ }}",
-                    "linkTextTemplate": "{{ @ }}",
-                    "linkTitleTemplate": "{{ @ }}",
-                    "linkOpenInNewTab": true
-                  },
-                  {
                     "fieldName": "taxa_evento",
                     "type": "float",
                     "displayAs": "number",
                     "visible": true,
-                    "order": 6,
+                    "order": 4,
                     "title": "taxa_evento",
                     "displayName": "taxa_evento",
                     "alignContent": "right",
@@ -1130,7 +2523,7 @@
                     "type": "float",
                     "displayAs": "number",
                     "visible": true,
-                    "order": 7,
+                    "order": 5,
                     "title": "odds",
                     "displayName": "odds",
                     "alignContent": "right",
@@ -1158,7 +2551,7 @@
                     "type": "float",
                     "displayAs": "number",
                     "visible": true,
-                    "order": 8,
+                    "order": 6,
                     "title": "woe",
                     "displayName": "woe",
                     "alignContent": "right",
@@ -1186,7 +2579,7 @@
                     "type": "float",
                     "displayAs": "number",
                     "visible": true,
-                    "order": 9,
+                    "order": 7,
                     "title": "iv",
                     "displayName": "iv",
                     "alignContent": "right",
@@ -1214,7 +2607,7 @@
                     "type": "float",
                     "displayAs": "number",
                     "visible": true,
-                    "order": 10,
+                    "order": 8,
                     "title": "lift",
                     "displayName": "lift",
                     "alignContent": "right",
@@ -1247,153 +2640,15 @@
               "withRowNumber": false,
               "frame": {
                 "showTitle": true,
-                "title": "Tabela bivariada"
+                "title": "Tabela bivariada (variável selecionada)"
               }
             }
           },
           "position": {
             "x": 2,
-            "y": 2,
+            "y": 7,
             "width": 4,
-            "height": 10
-          }
-        }
-      ]
-    },
-    {
-      "name": "escoragem",
-      "displayName": "Escoragem",
-      "layout": [
-        {
-          "widget": {
-            "name": "t_esc",
-            "multilineTextboxSpec": {
-              "lines": [
-                "## Escoragem da safra com o @champion",
-                "Score 0–1000: quanto maior, menor o risco. Decisão pelo threshold registrado com o modelo."
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 0,
-            "width": 6,
-            "height": 2
-          }
-        },
-        {
-          "widget": {
-            "name": "b_decisao",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_decisao",
-                  "fields": [
-                    {
-                      "name": "decisao",
-                      "expression": "`decisao`"
-                    },
-                    {
-                      "name": "clientes",
-                      "expression": "`clientes`"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 3,
-              "widgetType": "bar",
-              "encodings": {
-                "x": {
-                  "fieldName": "decisao",
-                  "scale": {
-                    "type": "categorical"
-                  },
-                  "displayName": "decisao"
-                },
-                "y": {
-                  "fieldName": "clientes",
-                  "scale": {
-                    "type": "quantitative"
-                  },
-                  "displayName": "clientes"
-                },
-                "color": {
-                  "fieldName": "decisao",
-                  "scale": {
-                    "type": "categorical"
-                  },
-                  "displayName": "decisao"
-                }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Clientes por decisão"
-              }
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 2,
-            "width": 2,
-            "height": 7
-          }
-        },
-        {
-          "widget": {
-            "name": "b_score",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_score",
-                  "fields": [
-                    {
-                      "name": "faixa_score",
-                      "expression": "`faixa_score`"
-                    },
-                    {
-                      "name": "clientes",
-                      "expression": "`clientes`"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 3,
-              "widgetType": "bar",
-              "encodings": {
-                "x": {
-                  "fieldName": "faixa_score",
-                  "scale": {
-                    "type": "categorical"
-                  },
-                  "displayName": "faixa_score"
-                },
-                "y": {
-                  "fieldName": "clientes",
-                  "scale": {
-                    "type": "quantitative"
-                  },
-                  "displayName": "clientes"
-                }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Distribuição do score (faixas de 50 pontos)"
-              }
-            }
-          },
-          "position": {
-            "x": 2,
-            "y": 2,
-            "width": 4,
-            "height": 7
+            "height": 5
           }
         }
       ]

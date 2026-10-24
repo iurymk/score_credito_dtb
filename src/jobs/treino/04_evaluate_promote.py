@@ -168,6 +168,35 @@ tags = {
 for k, v in tags.items():
     client.set_model_version_tag(model_name, version, k, v)
 
+
+# Desempenho no teste → tabelas gold (página "Desempenho do modelo" do painel). Gravado antes da decisão, para que
+# uma versão reprovada também fique registrada, com o motivo.
+def write_gold_version(pdf, name: str, comment: str) -> None:
+    table = f"{catalog}.{schema}.{name}"
+    sdf = spark.createDataFrame(pdf).withColumn("model_version", F.lit(version)).withColumn("avaliado_em", F.current_timestamp())
+    writer = sdf.write.format("delta").mode("overwrite")
+    if spark.catalog.tableExists(table):
+        writer = writer.option("replaceWhere", f"model_version = '{version}'")
+    writer.saveAsTable(table)
+    spark.sql(f"COMMENT ON TABLE {table} IS '{comment}'")
+
+
+desempenho = pd.DataFrame([{
+    **{k: float(v) for k, v in metrics.items()},
+    **gaps,
+    "threshold": float(threshold),
+    "pct_reprovados": (metrics["tp"] + metrics["fp"]) / len(test),
+    "n_teste": len(test),
+    "taxa_inadimplencia": float(y_true.mean()),
+    "gate_status": "reprovado" if failures else "aprovado",
+    "gate_falhas": "; ".join(failures),
+}])
+distancia = (cortes["threshold"] - threshold).abs()
+cortes["threshold_escolhido"] = distancia == distancia.min()  # o corte candidato mais próximo do threshold do modelo
+write_gold_version(desempenho, c.GOLD_DESEMPENHO, "Métricas de desempenho no teste e resultado dos portões, por versão")
+write_gold_version(faixas, c.GOLD_DESEMPENHO_FAIXAS, "40 faixas de risco no teste (taxa de maus, lift, KS acumulado) por versão")
+write_gold_version(cortes, c.GOLD_DESEMPENHO_CORTES, "Pontos de corte candidatos no teste (precisão, recall, custo) por versão")
+
 if failures:
     raise RuntimeError(f"v{version} reprovada nos portões de qualidade — não promovida:\n  - " + "\n  - ".join(failures))
 

@@ -107,12 +107,14 @@ saídas** para documentar o raciocínio. Depois, a lógica foi industrializada e
 
 ## Painel de monitoramento (AI/BI)
 
-Declarado no bundle ([`dashboard.yml`](resources/dashboard.yml)) e lendo as tabelas gold:
+Declarado no bundle ([`dashboard.yml`](resources/dashboard.yml)) e lendo só as tabelas gold:
 
-- **Monitoramento (PSI):** safra, modelo, clientes escorados, % reprovados, PSI do score, variáveis em alerta;
-  PSI por variável e a comparação esperado × atual faixa a faixa.
-- **Bivariadas:** IV por variável e a tabela do optimal binning (volume, taxa, odds, WoE, IV e lift por faixa).
-- **Escoragem:** clientes por decisão e distribuição do score.
+| Página | O que mostra |
+|---|---|
+| **Desempenho do modelo** | Indicadores do `@champion` no teste (AUC, KS, PR-AUC, recall, % reprovados), taxa de inadimplência pelas 40 faixas de risco, curva KS, **tabela de pontos de corte** (precisão, recall e custo de cada threshold, com o corte do modelo marcado) e histórico das versões avaliadas |
+| **Distribuição das variáveis** | Filtro por variável, status em destaque (variável de maior PSI), legenda das faixas de PSI, top variáveis por PSI e a distribuição esperado × atual por faixa da variável selecionada |
+| **Escoragem** | Clientes escorados, % reprovados, score médio, decisões e distribuição do score por decisão |
+| **Bivariadas** | Filtro por variável, IV de todas as variáveis, taxa de inadimplência e lift por faixa e a tabela do optimal binning |
 
 ## Estrutura do repositório
 
@@ -205,6 +207,7 @@ databricks bundle destroy -t dev
 | `gold_credit_scores` | gold | `prob_inadimplencia`, `score`, `decisao`, `motivos` por cliente, safra e versão |
 | `gold_bivariadas` | gold | Optimal binning das features por versão do modelo |
 | `gold_monitoramento_psi`, `gold_monitoramento_resumo` | gold | PSI por faixa e por variável, safra e versão |
+| `gold_desempenho_modelo`, `gold_desempenho_faixas`, `gold_desempenho_cortes` | gold | Métricas no teste e resultado dos portões, 40 faixas de risco e pontos de corte, por versão |
 | `credit_scoring_xgb` | modelo no UC | Uma versão por treino; alias `@champion`; tags com métricas; model card |
 | `credit_scoring_dev` | experimento MLflow | Comparação dos 4 modelos, tabelas de faixas e cortes, ROC, SHAP, fairness |
 | `credit-scoring-dev` | endpoint | CPU, scale-to-zero, servindo o `@champion` |
@@ -231,7 +234,7 @@ recebendo o mesmo payload do endpoint (inteiros, decimais e nulos).
 - **PSI ≈ 0:** o Kaggle separou treino e teste aleatoriamente, então a "safra" tem a mesma população do treino. O
   monitoramento funciona (os testes mostram a detecção de drift), mas aqui não há drift a detectar.
 - **Calibração:** o `scale_pos_weight` distorce as probabilidades; para precificação seria preciso calibrar.
-- **CI/CD:** GitHub Actions com `pytest` + `databricks bundle validate` e deploy em `prod` com service principal.
+- **Testes automáticos:** rodar os testes a cada mudança no repositório (integração contínua).
 - **Retreino:** propositalmente fora do escopo — o modelo em produção é o escolhido na experimentação.
 
 ## Créditos

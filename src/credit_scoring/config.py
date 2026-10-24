@@ -14,6 +14,9 @@ SILVER_TREINO, SILVER_SAFRA = "silver_credit_treino", "silver_credit_safra"
 GOLD_SCORES = "gold_credit_scores"
 GOLD_BIVARIADAS = "gold_bivariadas"
 GOLD_PSI, GOLD_PSI_RESUMO = "gold_monitoramento_psi", "gold_monitoramento_resumo"
+# Desempenho de cada versão avaliada no teste (alimentam a página "Desempenho do modelo" do painel)
+GOLD_DESEMPENHO = "gold_desempenho_modelo"
+GOLD_DESEMPENHO_FAIXAS, GOLD_DESEMPENHO_CORTES = "gold_desempenho_faixas", "gold_desempenho_cortes"
 
 REVOLVING = "RevolvingUtilizationOfUnsecuredLines"
 AGE = "age"
